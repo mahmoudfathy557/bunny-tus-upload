@@ -8,7 +8,7 @@ import {
   Post,
 } from '@nestjs/common';
 import { FileUploadService } from './file-upload.service';
-import { CreateFileUploadDto } from './dto/create-update-file-upload.dto copy';
+import { CreateFileUploadDto } from './dto/create-update-file-upload.dto';
 import { UpdateFileUploadDto } from './dto/update-update-file-upload.dto';
 
 @Controller('file-uploads')
