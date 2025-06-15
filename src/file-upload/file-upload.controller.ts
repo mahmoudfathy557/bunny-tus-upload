@@ -1,45 +1,51 @@
-import {
-  Body,
-  Controller,
-  Delete,
-  Get,
-  Param,
-  Patch,
-  Post,
-} from '@nestjs/common';
+import { Body, Controller, Post } from '@nestjs/common';
+import { ApiTags, ApiOperation, ApiBody, ApiSecurity } from '@nestjs/swagger';
 import { FileUploadService } from './file-upload.service';
-import { CreateFileUploadDto } from './dto/create-file-upload.dto';
-import { UpdateFileUploadDto } from './dto/update-file-upload.dto';
+import { InitiateUploadDto } from './dto/initiate-file-upload.dto';
 
-@Controller('file-uploads')
+@ApiTags('File Upload') // Group endpoints under 'File Upload' tag in Swagger
+@Controller('file-upload')
 export class FileUploadController {
-  constructor(private readonly fileUploadService: FileUploadService) {}
+  constructor(private readonly bunnyCdnService: FileUploadService) {}
 
-  @Post()
-  create(@Body() createFileUploadDto: CreateFileUploadDto) {
-    return this.fileUploadService.create(createFileUploadDto);
-  }
-
-  @Get()
-  findAll() {
-    return this.fileUploadService.findAll();
-  }
-
-  @Get(':id')
-  findOne(@Param('id') id: string) {
-    return this.fileUploadService.findOne(+id);
-  }
-
-  @Patch(':id')
-  update(
-    @Param('id') id: string,
-    @Body() updateFileUploadDto: UpdateFileUploadDto,
-  ) {
-    return this.fileUploadService.update(+id, updateFileUploadDto);
-  }
-
-  @Delete(':id')
-  remove(@Param('id') id: string) {
-    return this.fileUploadService.remove(+id);
+  @Post('initiate-tus-upload')
+  @ApiOperation({
+    summary: 'Initiate a TUS resumable upload session with Bunny.net Stream',
+    description:
+      'This endpoint first creates a video object on Bunny.net and then generates a presigned signature. The client should use the returned endpoint and authorization headers for the actual TUS upload.',
+  })
+  @ApiSecurity('BunnyNetApiKey') // Refers to the security scheme defined in main.ts
+  @ApiBody({
+    type: InitiateUploadDto,
+    description: 'Details required to initiate the TUS upload.',
+    examples: {
+      a: {
+        summary: 'Example: Large Video File',
+        value: {
+          filename: 'my-presentation-video.mp4',
+          fileSize: 150 * 1024 * 1024, // 150 MB
+          collectionId: 'your-optional-collection-id', // Optional
+        } as InitiateUploadDto,
+      },
+      b: {
+        summary: 'Example: Small Audio File',
+        value: {
+          filename: 'my-podcast-episode.mp3',
+          fileSize: 10 * 1024 * 1024, // 10 MB
+        } as InitiateUploadDto,
+      },
+    },
+  })
+  async initiateTusUpload(@Body() initiateUploadDto: InitiateUploadDto) {
+    const { filename, fileSize, collectionId } = initiateUploadDto;
+    console.log(
+      '🚀 ~ file: file-upload.controller.ts:41 ~ initiateUploadDto:',
+      initiateUploadDto,
+    );
+    return this.bunnyCdnService.initiateTusUpload(
+      filename,
+      fileSize,
+      collectionId,
+    );
   }
 }

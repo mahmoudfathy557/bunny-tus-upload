@@ -91,8 +91,7 @@ export class FileUploadService {
     libraryId: string;
   }> {
     // API endpoint for creating video objects on Bunny Stream
-    const createVideoApiUrl = 'https://video.bunnycdn.com';
-    const createVideoUrl = `${createVideoApiUrl}/library/${this.bunnyStreamLibraryId}/videos`;
+    const createVideoUrl = `${this.bunnyStreamApiBaseUrl}/library/${this.bunnyStreamLibraryId}/videos`;
     this.logger.log(
       `Creating video object on Bunny.net Stream: ${createVideoUrl}`,
     );
@@ -107,6 +106,10 @@ export class FileUploadService {
       const createVideoBody: any = {
         title: filename,
       };
+      console.log(
+        '🚀 ~ file: file-upload.service.ts:108 ~ createVideoBody:',
+        createVideoBody,
+      );
 
       if (collectionId) {
         createVideoBody.collectionId = collectionId;
@@ -118,8 +121,13 @@ export class FileUploadService {
           validateStatus: (status) => status === 200,
         }),
       );
+      console.log(
+        '🚀 ~ file: file-upload.service.ts:117 ~ createVideoResponse:',
+        createVideoResponse,
+      );
 
       const videoId = createVideoResponse.data.guid; // Get the GUID of the newly created video
+      console.log('🚀 ~ file: file-upload.service.ts:125 ~ videoId:', videoId);
 
       if (!videoId) {
         throw new Error('Bunny.net did not return a Video ID after creation.');
@@ -134,6 +142,10 @@ export class FileUploadService {
         this.bunnyStreamApiKey,
         authorizationExpire,
         videoId,
+      );
+      console.log(
+        '🚀 ~ file: file-upload.service.ts:136 ~ authorizationSignature:',
+        authorizationSignature,
       );
       this.logger.log(
         `Signature generated successfully for video ID: ${videoId}`,
