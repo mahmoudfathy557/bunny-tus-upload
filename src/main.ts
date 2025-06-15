@@ -24,7 +24,7 @@ async function bootstrap() {
     .setVersion('1.0')
     .addApiKey(
       {
-        type: 'apiKey', // Can be 'apiKey', 'http', 'oauth2', 'openIdConnect'
+        type: 'apiKey',
         name: 'X-API-KEY', // Name of the header where the API key is expected
         in: 'header', // Location of the API key (header, query, cookie)
       },

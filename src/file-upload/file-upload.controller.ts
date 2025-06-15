@@ -1,5 +1,11 @@
 import { Body, Controller, Post } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiBody, ApiSecurity } from '@nestjs/swagger';
+import {
+  ApiTags,
+  ApiOperation,
+  ApiBody,
+  ApiSecurity,
+  ApiResponse,
+} from '@nestjs/swagger';
 import { FileUploadService } from './file-upload.service';
 import { InitiateUploadDto } from './dto/initiate-file-upload.dto';
 
@@ -35,6 +41,15 @@ export class FileUploadController {
         } as InitiateUploadDto,
       },
     },
+  })
+  @ApiResponse({
+    status: 400,
+    description: 'Bad Request (e.g., invalid filename or fileSize).',
+  })
+  @ApiResponse({
+    status: 500,
+    description:
+      'Internal Server Error (e.g., Bunny.net API call or signature generation failed).',
   })
   async initiateTusUpload(@Body() initiateUploadDto: InitiateUploadDto) {
     const { filename, fileSize, collectionId } = initiateUploadDto;
