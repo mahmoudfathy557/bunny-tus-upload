@@ -16,6 +16,7 @@ export class FileUploadService {
   private readonly bunnyStreamLibraryId: string;
   private readonly bunnyStreamApiBaseUrl: string;
   private readonly bunnyTusUploadEndpoint: string;
+  private readonly bunnyAuthSignatureExpiresInSeconds: number;
 
   constructor(
     private readonly httpService: HttpService,
@@ -35,14 +36,22 @@ export class FileUploadService {
       'BUNNY_TUS_UPLOAD_ENDPOINT',
       'https://tus.bunnycdn.com/files/',
     )!;
+    this.bunnyAuthSignatureExpiresInSeconds = parseInt(
+      this.configService.get<string>(
+        'BUNNY_AUTH_SIGNATURE_EXPIRES_IN_SECONDS',
+        '3600',
+      ),
+      10,
+    )!;
 
     if (
       !this.bunnyStreamApiKey ||
       !this.bunnyStreamLibraryId ||
-      !this.bunnyTusUploadEndpoint
+      !this.bunnyTusUploadEndpoint ||
+      !this.bunnyAuthSignatureExpiresInSeconds
     ) {
       this.logger.error(
-        'Bunny.net API key, Library ID, or TUS Upload Endpoint is not configured.',
+        'Bunny.net API key, Library ID, TUS Upload Endpoint, or Auth Signature Expiration is not configured.',
       );
       throw new InternalServerErrorException(
         'Bunny.net API configuration missing.',
@@ -84,55 +93,85 @@ export class FileUploadService {
     filename: string,
     fileSize: number,
     collectionId?: string,
-  ): Promise<{ uploadUrl: string; videoId: string }> {
-    const url = `${this.bunnyStreamApiBaseUrl}/library/${this.bunnyStreamLibraryId}/videos`;
-    this.logger.log(`Initiating TUS upload to: ${url}`);
+  ): Promise<{
+    endpoint: string;
+    authorizationSignature: string;
+    authorizationExpire: number;
+    videoId: string;
+    libraryId: string;
+  }> {
+    // API endpoint for creating video objects on Bunny Stream
+    const createVideoUrl = `${this.bunnyStreamApiBaseUrl}/library/${this.bunnyStreamLibraryId}/videos`;
+    this.logger.log(
+      `Creating video object on Bunny.net Stream: ${createVideoUrl}`,
+    );
 
     try {
-      const headers = {
+      // Step 1: Create a video object to get the videoId (GUID)
+      const createVideoHeaders = {
         AccessKey: this.bunnyStreamApiKey,
         'Content-Type': 'application/json',
       };
-      this.logger.debug(`Request Headers: ${JSON.stringify(headers)}`);
+      this.logger.debug(
+        `Request Headers: ${JSON.stringify(createVideoHeaders)}`,
+      );
 
-      const body: any = {
-        title: filename, // Use filename as title by default
+      const createVideoBody: any = {
+        title: filename,
       };
 
       if (collectionId && collectionId !== 'your-optional-collection-id') {
-        body.collectionId = collectionId;
+        createVideoBody.collectionId = collectionId;
       }
-      this.logger.debug(`Request Body: ${JSON.stringify(body)}`);
+      this.logger.debug(`Request Body: ${JSON.stringify(createVideoBody)}`);
 
-      // Use firstValueFrom to convert the Observable to a Promise
-      const response = await firstValueFrom(
-        this.httpService.post(url, body, {
-          headers,
-          maxRedirects: 0,
-          validateStatus: (status) => status === 200,
+      const createVideoResponse = await firstValueFrom(
+        this.httpService.post(createVideoUrl, createVideoBody, {
+          headers: createVideoHeaders,
+          validateStatus: (status) => status === 200, // Expect 200 OK for video creation
         }),
       );
 
-      const videoId = response.data.guid; // The unique ID for the video on Bunny.net
-      const uploadUrl = `${this.bunnyTusUploadEndpoint}${videoId}`; // Construct the TUS upload URL
+      const videoId = createVideoResponse.data.guid; // Get the GUID of the newly created video
 
       if (!videoId) {
-        // Only check for videoId, uploadUrl is constructed
-        throw new Error('Bunny.net did not return a Video ID.');
+        throw new Error('Bunny.net did not return a Video ID after creation.');
       }
+      this.logger.log(`Video object created. Video ID: ${videoId}`);
 
-      this.logger.log(
-        `TUS upload initiated successfully. Video ID: ${videoId}, Upload URL: ${uploadUrl}`,
+      // Step 2: Generate the presigned signature for TUS upload
+      const authorizationExpire =
+        Math.floor(Date.now() / 1000) + this.bunnyAuthSignatureExpiresInSeconds;
+      const authorizationSignature = this.generateBunnySignature(
+        this.bunnyStreamLibraryId,
+        this.bunnyStreamApiKey,
+        authorizationExpire,
+        videoId,
       );
-      return { uploadUrl, videoId };
+      this.logger.log(
+        `Signature generated successfully for video ID: ${videoId}`,
+      );
+
+      const signaturedVideo = {
+        endpoint: this.bunnyTusUploadEndpoint,
+        authorizationSignature: authorizationSignature,
+        authorizationExpire: authorizationExpire,
+        videoId: videoId,
+        libraryId: this.bunnyStreamLibraryId, // Include LibraryId for client
+      };
+      console.log(
+        '🚀 ~ file: file-upload.service.ts:156 ~ signaturedVideo:',
+        signaturedVideo,
+      );
+      return signaturedVideo;
     } catch (error) {
       if (error instanceof AxiosError) {
         this.logger.error(
-          `Bunny.net API error: ${error.response?.status} - ${JSON.stringify(error.response?.data)}`,
+          `Bunny.net API error: ${error.response?.status} - ${error.response?.data?.Message || error.message}`,
           error.response, // Log the full response object for more details
         );
         throw new InternalServerErrorException(
-          `Failed to initiate TUS upload with Bunny.net: ${error.response?.data?.Message || error.message}`,
+          `Failed to create video object or generate signature with Bunny.net: ${error.response?.data?.Message || error.message}`,
         );
       }
       this.logger.error(`An unexpected error occurred: ${error.message}`);
