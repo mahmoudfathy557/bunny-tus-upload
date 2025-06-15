@@ -1,0 +1,45 @@
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Param,
+  Patch,
+  Post,
+} from '@nestjs/common';
+import { FileUploadService } from './file-upload.service';
+import { CreateFileUploadDto } from './dto/create-update-file-upload.dto copy';
+import { UpdateFileUploadDto } from './dto/update-update-file-upload.dto';
+
+@Controller('file-uploads')
+export class FileUploadController {
+  constructor(private readonly fileUploadService: FileUploadService) {}
+
+  @Post()
+  create(@Body() createFileUploadDto: CreateFileUploadDto) {
+    return this.fileUploadService.create(createFileUploadDto);
+  }
+
+  @Get()
+  findAll() {
+    return this.fileUploadService.findAll();
+  }
+
+  @Get(':id')
+  findOne(@Param('id') id: string) {
+    return this.fileUploadService.findOne(+id);
+  }
+
+  @Patch(':id')
+  update(
+    @Param('id') id: string,
+    @Body() updateFileUploadDto: UpdateFileUploadDto,
+  ) {
+    return this.fileUploadService.update(+id, updateFileUploadDto);
+  }
+
+  @Delete(':id')
+  remove(@Param('id') id: string) {
+    return this.fileUploadService.remove(+id);
+  }
+}
