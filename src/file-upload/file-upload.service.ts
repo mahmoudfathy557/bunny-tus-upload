@@ -116,15 +116,24 @@ export class FileUploadService {
         `Request Headers: ${JSON.stringify(createVideoHeaders)}`,
       );
 
+      // Construct the request body based on provided parameters
       const createVideoBody: any = {
         title: filename,
       };
 
+      // Add collectionId to the request body if provided
       if (collectionId && collectionId !== 'your-optional-collection-id') {
         createVideoBody.collectionId = collectionId;
       }
+
+      // Add fileSize to the request body if provided
+      if (fileSize) {
+        createVideoBody.size = fileSize;
+      }
+
       this.logger.debug(`Request Body: ${JSON.stringify(createVideoBody)}`);
 
+      // Make the POST request to create the video object
       const createVideoResponse = await firstValueFrom(
         this.httpService.post(createVideoUrl, createVideoBody, {
           headers: createVideoHeaders,
@@ -132,6 +141,7 @@ export class FileUploadService {
         }),
       );
 
+      // Check if the videoId is present in the response
       const videoId = createVideoResponse.data.guid; // Get the GUID of the newly created video
 
       if (!videoId) {
@@ -140,6 +150,7 @@ export class FileUploadService {
       this.logger.log(`Video object created. Video ID: ${videoId}`);
 
       // Step 2: Generate the presigned signature for TUS upload
+      // The signature is generated using the libraryId, apiKey, expirationTime, and videoId
       const authorizationExpire =
         Math.floor(Date.now() / 1000) + this.bunnyAuthSignatureExpiresInSeconds;
       const authorizationSignature = this.generateBunnySignature(
@@ -152,6 +163,7 @@ export class FileUploadService {
         `Signature generated successfully for video ID: ${videoId}`,
       );
 
+      // Step 3: Return the TUS upload URL and signature
       const signaturedVideo = {
         endpoint: this.bunnyTusUploadEndpoint,
         authorizationSignature: authorizationSignature,
@@ -159,10 +171,7 @@ export class FileUploadService {
         videoId: videoId,
         libraryId: this.bunnyStreamLibraryId, // Include LibraryId for client
       };
-      console.log(
-        '🚀 ~ file: file-upload.service.ts:156 ~ signaturedVideo:',
-        signaturedVideo,
-      );
+
       return signaturedVideo;
     } catch (error) {
       if (error instanceof AxiosError) {
