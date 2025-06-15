@@ -3,7 +3,7 @@ import { ApiProperty } from '@nestjs/swagger';
 export class InitiateTusUploadResponseDto {
   @ApiProperty({
     description: 'The TUS upload endpoint provided by Bunny.net Stream.',
-    example: 'https://video.bunnycdn.com/tus/your-video-id',
+    example: 'https://video.bunnycdn.com/tusupload/your-video-id',
   })
   endpoint: string;
 
