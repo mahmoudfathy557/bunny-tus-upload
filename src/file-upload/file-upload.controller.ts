@@ -8,6 +8,7 @@ import {
 } from '@nestjs/swagger';
 import { FileUploadService } from './file-upload.service';
 import { InitiateUploadDto } from './dto/initiate-file-upload.dto';
+import { InitiateTusUploadResponseDto } from './dto/initiate-tus-upload-response.dto';
 
 @ApiTags('File Upload') // Group endpoints under 'File Upload' tag in Swagger
 @Controller('file-upload')
@@ -50,6 +51,20 @@ export class FileUploadController {
     status: 500,
     description:
       'Internal Server Error (e.g., Bunny.net API call or signature generation failed).',
+  })
+  @ApiResponse({
+    status: 200,
+    description:
+      'Successfully initiated the TUS upload session. Returns the presigned URL and authorization headers.',
+  })
+  @ApiResponse({
+    status: 401,
+    description: 'Unauthorized (e.g., missing or invalid API key).',
+  })
+  @ApiResponse({
+    status: 201,
+    description: 'File uploaded successfully',
+    type: InitiateTusUploadResponseDto,
   })
   async initiateTusUpload(@Body() initiateUploadDto: InitiateUploadDto) {
     const { filename, fileSize, collectionId } = initiateUploadDto;
