@@ -12,12 +12,31 @@ import {
   NotFoundException,
   Logger,
   HttpStatus,
+  InternalServerErrorException,
 } from '@nestjs/common';
 import { Request, Response } from 'express';
 import { BunnyService } from './bunny.service';
 import axios from 'axios';
 import { FileUploadService } from './file-upload.service';
+import {
+  ApiTags,
+  ApiOperation,
+  ApiResponse,
+  ApiHeader,
+  ApiConsumes,
+  ApiBody,
+} from '@nestjs/swagger';
+import { CreateUploadResponseDto } from './dto/create-upload-response.dto';
+import { GetUploadSessionResponseDto } from './dto/get-upload-session-response.dto';
+import { ListUploadSessionsResponseDto } from './dto/list-upload-sessions-response.dto';
+import { HealthCheckResponseDto } from './dto/health-check-response.dto';
+import { UploadCompletedResponseDto } from './dto/upload-completed-response.dto';
 
+const TUS_RESUMABLE_VERSION = '1.0.0';
+const TUS_MAX_SIZE = 5368709120; // 5GB
+const TUS_EXTENSIONS = 'creation,termination,checksum';
+
+@ApiTags('TUS File Upload') // Group endpoints under 'TUS File Upload' tag in Swagger
 @Controller('uploads')
 export class FileUploadController {
   private readonly logger = new Logger(FileUploadController.name);
@@ -27,56 +46,153 @@ export class FileUploadController {
     private bunnyService: BunnyService,
   ) {}
 
-  // TUS Protocol: OPTIONS request for CORS and capabilities
-  @Options('*')
-  async handleOptions(@Res() res: Response) {
-    res.setHeader('tus-resumable', '1.0.0');
-    res.setHeader('tus-version', '1.0.0');
-    res.setHeader('tus-max-size', '5368709120'); // 5GB
-    res.setHeader('tus-extension', 'creation,termination,checksum');
-    res.setHeader('access-control-allow-origin', '*');
+  private setTusHeaders(res: Response) {
+    res.setHeader('Tus-Resumable', TUS_RESUMABLE_VERSION);
+    res.setHeader('Tus-Version', TUS_RESUMABLE_VERSION);
+    res.setHeader('Tus-Max-Size', TUS_MAX_SIZE.toString());
+    res.setHeader('Tus-Extension', TUS_EXTENSIONS);
+    res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader(
-      'access-control-allow-methods',
+      'Access-Control-Allow-Methods',
       'POST,GET,HEAD,PATCH,PUT,OPTIONS',
     );
     res.setHeader(
-      'access-control-allow-headers',
+      'Access-Control-Allow-Headers',
       'Origin,X-Requested-With,Content-Type,Upload-Length,Upload-Offset,Tus-Resumable,Upload-Metadata,Authorization,X-HTTP-Method-Override',
     );
     res.setHeader(
-      'access-control-expose-headers',
-      'Upload-Offset,Location,Upload-Length,Tus-Version,Tus-Resumable,Tus-Max-Size,Tus-Extension,Upload-Metadata',
+      'Access-Control-Expose-Headers',
+      'Upload-Offset,Location,Upload-Length,Tus-Version,Tus-Resumable,Tus-Max-Size,Tus-Extension,Upload-Metadata,Upload-Expires,Upload-Concat',
     );
+  }
+
+  @ApiOperation({
+    summary: 'Handle TUS OPTIONS request for CORS and capabilities',
+    description:
+      'Responds with TUS protocol versions, extensions, and allowed headers for CORS preflight.',
+  })
+  @ApiResponse({
+    status: 204,
+    description: 'No Content - TUS capabilities and CORS headers returned.',
+    headers: {
+      'Tus-Resumable': {
+        description: 'The TUS protocol version supported by the server.',
+        schema: { type: 'string', example: '1.0.0' },
+      },
+      'Tus-Version': {
+        description: 'The TUS protocol versions supported by the server.',
+        schema: { type: 'string', example: '1.0.0' },
+      },
+      'Tus-Max-Size': {
+        description:
+          'The maximum upload size supported by the server (in bytes).',
+        schema: { type: 'string', example: '5368709120' },
+      },
+      'Tus-Extension': {
+        description: 'Comma-separated list of TUS extensions supported.',
+        schema: { type: 'string', example: 'creation,termination,checksum' },
+      },
+      'Access-Control-Allow-Origin': {
+        description: 'Allowed origins for CORS.',
+        schema: { type: 'string', example: '*' },
+      },
+      'Access-Control-Allow-Methods': {
+        description: 'Allowed HTTP methods for CORS.',
+        schema: { type: 'string', example: 'POST,GET,HEAD,PATCH,PUT,OPTIONS' },
+      },
+      'Access-Control-Allow-Headers': {
+        description: 'Allowed request headers for CORS.',
+        schema: {
+          type: 'string',
+          example:
+            'Origin,X-Requested-With,Content-Type,Upload-Length,Upload-Offset,Tus-Resumable,Upload-Metadata,Authorization,X-HTTP-Method-Override',
+        },
+      },
+      'Access-Control-Expose-Headers': {
+        description: 'Headers exposed to the client for CORS.',
+        schema: {
+          type: 'string',
+          example:
+            'Upload-Offset,Location,Upload-Length,Tus-Version,Tus-Resumable,Tus-Max-Size,Tus-Extension,Upload-Metadata',
+        },
+      },
+    },
+  })
+  // TUS Protocol: OPTIONS request for CORS and capabilities
+  @Options('*')
+  async handleOptions(@Res() res: Response) {
+    this.setTusHeaders(res);
     return res.status(204).end();
   }
 
+  @ApiOperation({
+    summary: 'Create a new TUS upload session',
+    description:
+      'Initiates a new resumable upload. The client must provide the Upload-Length and Upload-Metadata headers.',
+  })
+  @ApiHeader({
+    name: 'Upload-Length',
+    description: 'The size of the entire upload in bytes.',
+    required: true,
+    schema: { type: 'string', example: '1024000' }, // 1MB
+  })
+  @ApiHeader({
+    name: 'Upload-Metadata',
+    description:
+      'Comma-separated key-value pairs of metadata. Values are base64 encoded.',
+    required: false,
+    schema: {
+      type: 'string',
+      example: 'filename bXlfdmlkZW8ubXA0,filetype dmlkZW8vbXA0',
+    },
+  })
+  @ApiHeader({
+    name: 'Tus-Resumable',
+    description: 'The TUS protocol version used by the client.',
+    required: true,
+    schema: { type: 'string', example: '1.0.0' },
+  })
+  @ApiResponse({
+    status: 201,
+    description: 'Upload session created successfully.',
+    headers: {
+      'Tus-Resumable': {
+        description: 'The TUS protocol version supported by the server.',
+        schema: { type: 'string', example: '1.0.0' },
+      },
+      Location: {
+        description: 'The URL of the newly created upload resource.',
+        schema: { type: 'string', example: '/uploads/your-session-id' },
+      },
+      'Upload-Expires': {
+        description: 'The expiration date/time of the upload session.',
+        schema: { type: 'string', format: 'date-time' },
+      },
+    },
+    type: CreateUploadResponseDto,
+  })
+  @ApiResponse({
+    status: 400,
+    description: 'Bad Request (e.g., missing or invalid Upload-Length).',
+  })
+  @ApiResponse({
+    status: 412,
+    description: 'Precondition Failed (Unsupported TUS version).',
+  })
+  @ApiResponse({
+    status: 500,
+    description: 'Internal Server Error (Failed to create upload session).',
+  })
   // TUS Protocol: Create upload session
-  @Post()
-  async createUpload(
-    @Headers('upload-length') uploadLength: string,
-    @Headers('upload-metadata') uploadMetadata: string,
-    @Headers('tus-resumable') tusResumable: string,
-    @Res() res: Response,
-  ) {
-    this.logger.log('Creating new upload session');
-
-    // Validate TUS version
-    if (tusResumable !== '1.0.0') {
-      return res.status(412).json({ error: 'Unsupported TUS version' });
-    }
-
-    if (!uploadLength) {
-      return res
-        .status(400)
-        .json({ error: 'upload-length header is required' });
-    }
-
-    const filesize = parseInt(uploadLength, 10);
-    if (isNaN(filesize) || filesize <= 0) {
-      return res.status(400).json({ error: 'Invalid upload-length' });
-    }
-
-    // Parse metadata
+  /**
+   * Parses the TUS Upload-Metadata header into a key-value pair object.
+   * @param uploadMetadata The raw Upload-Metadata header string.
+   * @returns An object containing the parsed metadata.
+   */
+  private parseUploadMetadata(uploadMetadata: string): {
+    metadata: Record<string, string>;
+    filename: string;
+  } {
     let metadata: Record<string, string> = {};
     let filename = 'untitled';
 
@@ -96,6 +212,32 @@ export class FileUploadController {
         this.logger.warn('Failed to parse upload metadata', error);
       }
     }
+    return { metadata, filename };
+  }
+
+  @Post()
+  async createUpload(
+    @Headers('upload-length') uploadLength: string,
+    @Headers('upload-metadata') uploadMetadata: string,
+    @Headers('tus-resumable') tusResumable: string,
+    @Res() res: Response,
+  ) {
+    this.logger.log('Creating new upload session');
+
+    if (tusResumable !== TUS_RESUMABLE_VERSION) {
+      throw new BadRequestException('Unsupported TUS version');
+    }
+
+    if (!uploadLength) {
+      throw new BadRequestException('Upload-Length header is required');
+    }
+
+    const filesize = parseInt(uploadLength, 10);
+    if (isNaN(filesize) || filesize <= 0) {
+      throw new BadRequestException('Invalid Upload-Length');
+    }
+
+    const { metadata, filename } = this.parseUploadMetadata(uploadMetadata);
 
     try {
       const session = await this.uploadService.createUploadSession(
@@ -104,22 +246,52 @@ export class FileUploadController {
         metadata,
       );
 
-      // Return TUS headers
-      res.setHeader('tus-resumable', '1.0.0');
+      res.setHeader('tus-resumable', TUS_RESUMABLE_VERSION);
       res.setHeader('location', `/uploads/${session.id}`);
       res.setHeader('upload-expires', session.expiresAt.toISOString());
 
-      return res.status(201).json({
+      return res.status(HttpStatus.CREATED).json({
         id: session.id,
         location: `/uploads/${session.id}`,
         expires: session.expiresAt.toISOString(),
       });
     } catch (error) {
-      this.logger.error('Failed to create upload session', error);
-      return res.status(500).json({ error: 'Failed to create upload session' });
+      this.logger.error('Failed to create upload session', error.stack);
+      throw new InternalServerErrorException('Failed to create upload session');
     }
   }
 
+  @ApiOperation({
+    summary: 'Get TUS upload information (HEAD request)',
+    description:
+      'Retrieves the current offset and total length of an upload session.',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Upload information retrieved successfully.',
+    headers: {
+      'Tus-Resumable': {
+        description: 'The TUS protocol version supported by the server.',
+        schema: { type: 'string', example: '1.0.0' },
+      },
+      'Upload-Offset': {
+        description: 'The current offset of the uploaded bytes.',
+        schema: { type: 'string', example: '512000' },
+      },
+      'Upload-Length': {
+        description: 'The total size of the upload in bytes.',
+        schema: { type: 'string', example: '1024000' },
+      },
+      'Cache-Control': {
+        description: 'Cache control header.',
+        schema: { type: 'string', example: 'no-store' },
+      },
+    },
+  })
+  @ApiResponse({
+    status: 404,
+    description: 'Upload session not found.',
+  })
   // TUS Protocol: Get upload info
   @Head(':id')
   async getUploadInfo(@Req() req: Request, @Res() res: Response) {
@@ -127,17 +299,88 @@ export class FileUploadController {
     const session = this.uploadService.getUploadSession(sessionId);
 
     if (!session) {
-      return res.status(404).end();
+      throw new NotFoundException('Upload session not found');
     }
 
-    res.setHeader('tus-resumable', '1.0.0');
+    res.setHeader('tus-resumable', TUS_RESUMABLE_VERSION);
     res.setHeader('upload-offset', session.uploadOffset.toString());
     res.setHeader('upload-length', session.filesize.toString());
     res.setHeader('cache-control', 'no-store');
 
-    return res.status(200).end();
+    return res.status(HttpStatus.OK).end();
   }
 
+  @ApiOperation({
+    summary: 'Upload a chunk of data to an existing TUS upload session',
+    description:
+      'Appends a chunk of data to the upload resource at the specified offset.',
+  })
+  @ApiConsumes('application/offset+octet-stream') // Specify content type for binary data
+  @ApiHeader({
+    name: 'Upload-Offset',
+    description: 'The current offset of the uploaded bytes.',
+    required: true,
+    schema: { type: 'string', example: '0' },
+  })
+  @ApiHeader({
+    name: 'Content-Type',
+    description: 'Must be application/offset+octet-stream.',
+    required: true,
+    schema: { type: 'string', example: 'application/offset+octet-stream' },
+  })
+  @ApiHeader({
+    name: 'Tus-Resumable',
+    description: 'The TUS protocol version used by the client.',
+    required: true,
+    schema: { type: 'string', example: '1.0.0' },
+  })
+  @ApiBody({
+    description: 'Binary data chunk to upload.',
+    required: true,
+    schema: {
+      type: 'string',
+      format: 'binary', // Indicate binary content
+    },
+  })
+  @ApiResponse({
+    status: 204,
+    description: 'No Content - Chunk uploaded successfully.',
+    headers: {
+      'Tus-Resumable': {
+        description: 'The TUS protocol version supported by the server.',
+        schema: { type: 'string', example: '1.0.0' },
+      },
+      'Upload-Offset': {
+        description: 'The new offset of the uploaded bytes after this chunk.',
+        schema: { type: 'string', example: '1024000' },
+      },
+    },
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Upload completed successfully.',
+    type: UploadCompletedResponseDto,
+  })
+  @ApiResponse({
+    status: 400,
+    description: 'Bad Request (e.g., missing headers, invalid content-type).',
+  })
+  @ApiResponse({
+    status: 404,
+    description: 'Upload session not found.',
+  })
+  @ApiResponse({
+    status: 409,
+    description: 'Conflict (Upload offset mismatch).',
+  })
+  @ApiResponse({
+    status: 412,
+    description: 'Precondition Failed (Unsupported TUS version).',
+  })
+  @ApiResponse({
+    status: 500,
+    description: 'Internal Server Error (Failed to upload chunk).',
+  })
   // TUS Protocol: Upload chunk
   @Patch(':id')
   async uploadChunk(
@@ -152,42 +395,36 @@ export class FileUploadController {
       `Uploading chunk for session: ${sessionId}, offset: ${uploadOffset}`,
     );
 
-    // Validate TUS version
-    if (tusResumable !== '1.0.0') {
-      return res.status(412).json({ error: 'Unsupported TUS version' });
+    if (tusResumable !== TUS_RESUMABLE_VERSION) {
+      throw new BadRequestException('Unsupported TUS version');
     }
 
     const session = this.uploadService.getUploadSession(sessionId);
     if (!session) {
       this.logger.error(`Upload session not found: ${sessionId}`);
-      return res.status(404).json({ error: 'Upload session not found' });
+      throw new NotFoundException('Upload session not found');
     }
 
     if (!uploadOffset) {
-      return res
-        .status(400)
-        .json({ error: 'upload-offset header is required' });
+      throw new BadRequestException('Upload-Offset header is required');
     }
 
     const offset = parseInt(uploadOffset, 10);
     if (isNaN(offset)) {
-      return res.status(400).json({ error: 'Invalid upload-offset header' });
+      throw new BadRequestException('Invalid Upload-Offset header');
     }
 
-    // Log offset comparison for debugging
     this.logger.log(
       `Session ${sessionId}: Client offset=${offset}, Server offset=${session.uploadOffset}`,
     );
 
-    // Allow offset to be equal or less (for retries) but warn on mismatch
     if (offset < session.uploadOffset) {
       this.logger.warn(
         `Client offset ${offset} is behind server offset ${session.uploadOffset} for session ${sessionId}`,
       );
-      // Return current server offset
-      res.setHeader('tus-resumable', '1.0.0');
+      res.setHeader('tus-resumable', TUS_RESUMABLE_VERSION);
       res.setHeader('upload-offset', session.uploadOffset.toString());
-      return res.status(409).json({
+      return res.status(HttpStatus.CONFLICT).json({
         error: 'Upload offset behind server state',
         expected: session.uploadOffset,
         received: offset,
@@ -195,17 +432,15 @@ export class FileUploadController {
     }
 
     if (contentType !== 'application/offset+octet-stream') {
-      return res.status(400).json({ error: 'Invalid content-type' });
+      throw new BadRequestException('Invalid Content-Type');
     }
 
     try {
-      // Get content length to track chunk size
       const contentLength = parseInt(req.headers['content-length'] || '0', 10);
       this.logger.log(
         `Uploading chunk: ${contentLength} bytes at offset ${offset} for session ${sessionId}`,
       );
 
-      // Forward the chunk to Bunny.net TUS endpoint
       const response = await axios({
         method: 'PATCH',
         url: session.tusUploadUrl,
@@ -213,19 +448,18 @@ export class FileUploadController {
         headers: {
           'upload-offset': uploadOffset,
           'content-type': contentType,
-          'tus-resumable': '1.0.0',
+          'tus-resumable': TUS_RESUMABLE_VERSION,
           'content-length': req.headers['content-length'],
         },
         maxRedirects: 0,
-        validateStatus: (status) => status < 500, // Don't throw on 4xx errors
-        timeout: 30000, // 30 second timeout
+        validateStatus: (status) => status < 500,
+        timeout: 30000,
       });
 
       this.logger.log(
         `Bunny.net response status: ${response.status} for session ${sessionId}`,
       );
 
-      // Get the new offset from Bunny.net response
       const bunnyOffset = response.headers['upload-offset'];
       const newOffset = bunnyOffset
         ? parseInt(bunnyOffset, 10)
@@ -235,21 +469,18 @@ export class FileUploadController {
         `Updated offset for session ${sessionId}: ${session.uploadOffset} -> ${newOffset}`,
       );
 
-      // Update our session with the new offset
       this.uploadService.updateUploadOffset(sessionId, newOffset);
 
-      // Check if upload is complete
       if (newOffset >= session.filesize) {
         this.uploadService.completeUploadSession(sessionId);
         this.logger.log(
           `Upload completed for session: ${sessionId}, video: ${session.videoId}`,
         );
 
-        // Return final response with video info
-        res.setHeader('tus-resumable', '1.0.0');
+        res.setHeader('tus-resumable', TUS_RESUMABLE_VERSION);
         res.setHeader('upload-offset', newOffset.toString());
 
-        return res.status(200).json({
+        return res.status(HttpStatus.OK).json({
           completed: true,
           videoId: session.videoId,
           videoUrl: this.bunnyService.getVideoUrl(session.bunnyVideoId),
@@ -257,22 +488,20 @@ export class FileUploadController {
         });
       }
 
-      // Return updated offset
-      res.setHeader('tus-resumable', '1.0.0');
+      res.setHeader('tus-resumable', TUS_RESUMABLE_VERSION);
       res.setHeader('upload-offset', newOffset.toString());
 
-      return res.status(204).end();
+      return res.status(HttpStatus.NO_CONTENT).end();
     } catch (error) {
       this.logger.error(
         `Failed to upload chunk to Bunny.net for session ${sessionId}:`,
         error.response?.data || error.message,
       );
 
-      if (error.response?.status === 409) {
-        // Offset conflict - get current offset from Bunny.net
+      if (error.response?.status === HttpStatus.CONFLICT) {
         try {
           const headResponse = await axios.head(session.tusUploadUrl, {
-            headers: { 'tus-resumable': '1.0.0' },
+            headers: { 'tus-resumable': TUS_RESUMABLE_VERSION },
           });
           const currentOffset = parseInt(
             headResponse.headers['upload-offset'] || '0',
@@ -280,9 +509,9 @@ export class FileUploadController {
           );
           this.uploadService.updateUploadOffset(sessionId, currentOffset);
 
-          res.setHeader('tus-resumable', '1.0.0');
+          res.setHeader('tus-resumable', TUS_RESUMABLE_VERSION);
           res.setHeader('upload-offset', currentOffset.toString());
-          return res.status(409).json({
+          return res.status(HttpStatus.CONFLICT).json({
             error: 'Upload offset conflict',
             currentOffset: currentOffset,
             receivedOffset: offset,
@@ -292,24 +521,40 @@ export class FileUploadController {
             'Failed to get current offset from Bunny.net',
             headError,
           );
+          throw new InternalServerErrorException(
+            'Failed to resolve upload offset conflict',
+          );
         }
       }
 
-      return res.status(500).json({ error: 'Failed to upload chunk' });
+      throw new InternalServerErrorException('Failed to upload chunk');
     }
   }
 
+  @ApiOperation({
+    summary: 'Get detailed information about a specific upload session',
+    description: 'Retrieves the current state and metadata of an upload.',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Upload session information retrieved successfully.',
+    type: GetUploadSessionResponseDto,
+  })
+  @ApiResponse({
+    status: 404,
+    description: 'Upload session not found.',
+  })
   // Get upload session info (custom endpoint)
   @Get(':id')
-  async getUploadSession(@Req() req: Request, @Res() res: Response) {
+  async getUploadSession(@Req() req: Request) {
     const sessionId = req.params.id;
     const session = this.uploadService.getUploadSession(sessionId);
 
     if (!session) {
-      return res.status(404).json({ error: 'Upload session not found' });
+      throw new NotFoundException('Upload session not found');
     }
 
-    return res.json({
+    return {
       id: session.id,
       videoId: session.videoId,
       filename: session.filename,
@@ -319,14 +564,23 @@ export class FileUploadController {
       createdAt: session.createdAt,
       expiresAt: session.expiresAt,
       metadata: session.metadata,
-    });
+    };
   }
 
+  @ApiOperation({
+    summary: 'List all active TUS upload sessions (for debugging/monitoring)',
+    description: 'Retrieves a list of all currently active upload sessions.',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'List of upload sessions retrieved successfully.',
+    type: ListUploadSessionsResponseDto,
+  })
   // List all upload sessions (for debugging)
   @Get()
-  async listUploadSessions(@Res() res: Response) {
+  async listUploadSessions() {
     const sessions = this.uploadService.getAllSessions();
-    return res.json({
+    return {
       sessions: sessions.map((session) => ({
         id: session.id,
         videoId: session.videoId,
@@ -338,18 +592,27 @@ export class FileUploadController {
         expiresAt: session.expiresAt,
       })),
       total: sessions.length,
-    });
+    };
   }
 
+  @ApiOperation({
+    summary: 'Health check endpoint for the TUS proxy server',
+    description: 'Returns the status of the server and TUS capabilities.',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Server is healthy and TUS capabilities are reported.',
+    type: HealthCheckResponseDto,
+  })
   // Health check endpoint
   @Get('health')
-  async healthCheck(@Res() res: Response) {
-    return res.json({
+  async healthCheck() {
+    return {
       status: 'ok',
       timestamp: new Date().toISOString(),
-      tusVersion: '1.0.0',
-      maxSize: '5GB',
-      extensions: ['creation', 'termination', 'checksum'],
-    });
+      tusVersion: TUS_RESUMABLE_VERSION,
+      maxSize: TUS_MAX_SIZE,
+      extensions: TUS_EXTENSIONS.split(','),
+    };
   }
 }
