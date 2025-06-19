@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import axios, { AxiosResponse } from 'axios';
+import * as crypto from 'crypto';
 
 export interface BunnyUploadResponse {
   guid: string;
@@ -19,14 +20,18 @@ export class BunnyService {
   private readonly libraryId: string;
   private readonly cdnUrl: string;
   private readonly pullZone: string;
+  private readonly securityKey: string;
 
   constructor(private configService: ConfigService) {
     this.apiKey = this.configService.get<string>('BUNNY_STREAM_API_KEY')!;
     this.libraryId = this.configService.get<string>('BUNNY_STREAM_LIBRARY_ID')!;
     this.cdnUrl = this.configService.get<string>('BUNNY_STREAM_CDN_URL')!;
     this.pullZone = this.configService.get<string>('BUNNY_STREAM_PULL_ZONE')!;
+    this.securityKey = this.configService.get<string>(
+      'BUNNY_STREAM_SECURITY_KEY',
+    )!;
 
-    if (!this.apiKey || !this.libraryId) {
+    if (!this.apiKey || !this.libraryId || !this.securityKey) {
       throw new Error('Missing required Bunny.net configuration');
     }
   }
@@ -107,10 +112,20 @@ export class BunnyService {
   }
 
   getVideoUrl(videoId: string): string {
-    return `${this.cdnUrl}/${videoId}/playlist.m3u8`;
+    const expires = Math.floor(Date.now() / 1000) + 3600; // Link valid for 1 hour
+    const hash = crypto
+      .createHash('sha256')
+      .update(`${this.securityKey}${videoId}${expires}`)
+      .digest('hex');
+    return `${this.cdnUrl}/${videoId}/playlist.m3u8?token=${hash}&expires=${expires}`;
   }
 
   getThumbnailUrl(videoId: string): string {
-    return `${this.cdnUrl}/${videoId}/thumbnail.jpg`;
+    const expires = Math.floor(Date.now() / 1000) + 3600; // Link valid for 1 hour
+    const hash = crypto
+      .createHash('sha256')
+      .update(`${this.securityKey}${videoId}${expires}`)
+      .digest('hex');
+    return `${this.cdnUrl}/${videoId}/thumbnail.jpg?token=${hash}&expires=${expires}`;
   }
 }
