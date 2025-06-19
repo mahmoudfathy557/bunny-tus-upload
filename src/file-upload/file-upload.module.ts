@@ -3,6 +3,7 @@ import { FileUploadController } from './file-upload.controller';
 import { FileUploadService } from './file-upload.service';
 import { HttpModule } from '@nestjs/axios';
 import { ConfigModule } from '@nestjs/config';
+import { BunnyService } from './bunny.service';
 
 @Module({
   imports: [
@@ -10,7 +11,7 @@ import { ConfigModule } from '@nestjs/config';
     ConfigModule,
   ],
   controllers: [FileUploadController],
-  providers: [FileUploadService],
+  providers: [FileUploadService, BunnyService],
   exports: [],
 })
 export class FileUploadModule {}
